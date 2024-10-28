@@ -2,7 +2,7 @@
 
 [PepGB & diPepGB](https://arxiv.org/abs/2401.14665) a deep learning-based debiasing framework that mitigates empirical biases and enhances peptide-protein prediction](https://arxiv.org/abs/2401.14665).
 
-<img src="./recomb_figs_1.pdf" alt="model"  width="80%"/>
+<img src="./recomb_figs_1.jpg" alt="model_bias"  width="80%"/>
 
 
 ## Installation
