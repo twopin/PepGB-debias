@@ -2,7 +2,7 @@
 
 [PepGB & diPepGB](https://arxiv.org/abs/2401.14665) a deep learning-based debiasing framework that mitigates empirical biases and enhances peptide-protein prediction](https://arxiv.org/abs/2401.14665).
 
-<!-- <img src="./assets/model.jpg" alt="model"  width="70%"/> -->
+<img src="./recomb_figs_1.pdf" alt="model"  width="80%"/>
 
 
 ## Installation
@@ -38,7 +38,7 @@ Example:
 
 ```bash
 python inference_pepGB.py \
-      --feature_path ./featyre/esm_dict
+      --feature_path ./feature/esm_dict
 ```
 
 <!-- <img src="./assets/bounding_box.png" alt="bounding box" width="70%" /> -->
