@@ -37,11 +37,8 @@ To predict your own data, you need to first generate ESM-based features of the p
 Example:
 
 ```bash
-python inference_pepGB.py \
-      --feature_path ./feature/esm_dict
+python inference_pepGB.py 
 ```
-
-<!-- <img src="./assets/bounding_box.png" alt="bounding box" width="70%" /> -->
 
 ## diPepGB
 
@@ -57,3 +54,5 @@ python inference_diPepGB.py
 ```
 For inference, using the ckpt model fuile in the `ckpt` folder.
 
+### Downloading ckpts for feature extraction
+https://cloud.tsinghua.edu.cn/d/5d43419346db4ab48007/
