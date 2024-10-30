@@ -214,7 +214,8 @@ class ProteinPeptideInteraction(InMemoryDataset):
         fold_id=1,
         pep_feat_src="finetune",
         random_feat=False,
-        reduct_ratio=0.5,
+        perturb_ratio=0.5,
+        perturb_method="add",
     ):
         self.model_name = model_name
         self.split_method = split_method
@@ -223,7 +224,8 @@ class ProteinPeptideInteraction(InMemoryDataset):
         self.pooling_method = pooling_method
         self.fold_id = fold_id
         self.pep_feat_src = pep_feat_src
-        self.reduct_ratio = reduct_ratio
+        self.perturb_ratio = perturb_ratio
+        self.perturb_method = perturb_method
         super().__init__(root, transform, pre_transform)
         self.data, self.slices = torch.load(self.processed_paths[0])
 
@@ -340,42 +342,54 @@ class ProteinPeptideInteraction(InMemoryDataset):
         # edges_df = pd.read_csv(
         #     "./data/yipin_protein_peptide/raw/pep_cls_net_cluster_0107_04pair.csv",
         # )
+
         edges_df = pd.read_csv(
             os.path.join(
-                self.root, "raw", self.split_methods[self.split_method]
+                "/ssd/projects/ppi/ppi_graph/data",
+                self.perturb_method,
+                "fold_{}_ratio_{}_{}".format(
+                    self.fold_id,
+                    self.perturb_ratio,
+                    self.split_methods[self.split_method],
+                ),
             )
         )
-        edges_df_train = edges_df[
-            edges_df["Fold{}_split".format(self.fold_id)] == "train"
+        edges_df = edges_df[
+            edges_df["Fold{}_split".format(self.fold_id)].isin(
+                ["train", "test"]
+            )
         ]
-        edges_df_test = edges_df[
-            edges_df["Fold{}_split".format(self.fold_id)] == "test"
-        ]
+        # edges_df_train = edges_df[
+        #     edges_df["Fold{}_split".format(self.fold_id)] == "train"
+        # ]
+        # edges_df_test = edges_df[
+        #     edges_df["Fold{}_split".format(self.fold_id)] == "test"
+        # ]
 
-        if self.reduct_ratio != 0:
-            # edges_df_train = (
-            #     edges_df.groupby("prot_idx")
-            #     .apply(lambda x: x.sample(frac=(1 - self.reduct_ratio)))
-            #     .reset_index(drop=True)
-            # )
-            dfs = []
-            s_column = "pep_idx"
+        # if self.perturb_ratio != 0:
+        #     # edges_df_train = (
+        #     #     edges_df.groupby("prot_idx")
+        #     #     .apply(lambda x: x.sample(frac=(1 - self.perturb_ratio)))
+        #     #     .reset_index(drop=True)
+        #     # )
+        #     dfs = []
+        #     s_column = "pep_idx"
 
-            ratio = 1 - self.reduct_ratio
-            for _v in list(edges_df_train[s_column].unique()):
-                _s_df = edges_df_train[edges_df_train[s_column] == _v]
-                if len(_s_df) == 1:
-                    dfs.append(_s_df)
-                else:
-                    n_rows_to_choose = int(len(_s_df) * ratio)
-                    if n_rows_to_choose < 1:
-                        dfs.append(_s_df.sample(n=1))
-                    else:
-                        dfs.append(_s_df.sample(n=n_rows_to_choose))
-            edges_df_train = pd.concat(dfs)
-        edges_df = pd.concat([edges_df_train, edges_df_test]).reset_index(
-            drop=True
-        )
+        #     ratio = 1 - self.perturb_ratio
+        #     for _v in list(edges_df_train[s_column].unique()):
+        #         _s_df = edges_df_train[edges_df_train[s_column] == _v]
+        #         if len(_s_df) == 1:
+        #             dfs.append(_s_df)
+        #         else:
+        #             n_rows_to_choose = int(len(_s_df) * ratio)
+        #             if n_rows_to_choose < 1:
+        #                 dfs.append(_s_df.sample(n=1))
+        #             else:
+        #                 dfs.append(_s_df.sample(n=n_rows_to_choose))
+        #     edges_df_train = pd.concat(dfs)
+        # edges_df = pd.concat([edges_df_train, edges_df_test]).reset_index(
+        #     drop=True
+        # )
         edges = np.array(edges_df.loc[:, ["pep_idx", "prot_idx"]]).transpose()
         # src = edges_df["pep_idx"].tolist()
         # dst = edges_df["prot_idx"].tolist()
@@ -492,7 +506,8 @@ class PLProteinPeptideInteraction(LightningDataModule):
         pep_feat="",
         random_feat=False,
         idp_test=False,
-        reduct_ratio=0.5,
+        perturb_ratio=0.5,
+        perturb_method="add",
     ):
         super().__init__()
         self.root = root
@@ -513,7 +528,8 @@ class PLProteinPeptideInteraction(LightningDataModule):
         self.fold_id = fold_id
         self.pep_feat = pep_feat
         self.random_feat = random_feat
-        self.reduct_ratio = reduct_ratio
+        self.perturb_ratio = perturb_ratio
+        self.perturb_method = perturb_method
         if remove_cache:
             cache_dir = os.path.join(self.root, "processed")
             if os.path.exists(cache_dir):
@@ -529,7 +545,7 @@ class PLProteinPeptideInteraction(LightningDataModule):
                 fold_id=self.fold_id,
                 pep_feat_src=pep_feat,
                 random_feat=self.random_feat,
-                reduct_ratio=self.reduct_ratio,
+                perturb_ratio=self.perturb_ratio,
             )
 
             self.data = dataset[0]

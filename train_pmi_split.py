@@ -421,7 +421,6 @@ def load_data_with_fold(
         edge_index=train_edges,
         edge_label=torch.zeros(len(train_edges_df), dtype=torch.long),
     )
-
     train_split_transform = T.RandomLinkSplit(
         num_val=val_ratio,
         num_test=0.0,

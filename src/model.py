@@ -169,6 +169,19 @@ class GNN(torch.nn.Module):
 # Our final classifier applies the dot-product between source and destination
 # node embeddings to derive edge-level predictions:
 class Classifier(torch.nn.Module):
+    def __init__(self, input_size):
+        super(Classifier, self).__init__()
+        self.model = nn.Sequential(
+            nn.Linear(input_size, int(input_size / 2)),  # First hidden layer
+            nn.ReLU(),  # Activation function for first hidden layer
+            nn.Linear(
+                int(input_size / 2), int(input_size / 4)
+            ),  # Second hidden layer
+            nn.ReLU(),  # Activation function for second hidden layer
+            nn.Linear(int(input_size / 4), 1),  # Output layer
+            nn.Sigmoid(),
+        )
+
     def forward(
         self, x_pep: Tensor, x_prot: Tensor, edge_label_index: Tensor
     ) -> Tensor:
@@ -176,7 +189,7 @@ class Classifier(torch.nn.Module):
         edge_feat_pep = x_pep[edge_label_index[0]]
         edge_feat_prot = x_prot[edge_label_index[1]]
         # Apply dot-product to get a prediction per supervision edge:
-        return (edge_feat_pep * edge_feat_prot).sum(dim=-1)
+        return torch.cat([edge_feat_pep, edge_feat_prot]).sum(dim=-1)
 
 
 class PPIHetero(torch.nn.Module):
@@ -225,14 +238,16 @@ class PPIHetero(torch.nn.Module):
 
         # Convert GNN model into a heterogeneous variant:
         self.gnn = to_hetero(self.gnn, metadata=metadata, debug=False)
-        self.classifier = Classifier()
-        # self.classifier = nn.Sequential(
-        #     nn.Dropout(dropout_ratio),
-        #     nn.Linear(self.hidden_channels * 2, hidden_channels),
-        #     nn.ReLU(),
-        #     nn.Dropout(dropout_ratio),
-        #     nn.Linear(self.hidden_channels, 1),
-        # )
+        # self.classifier = Classifier()
+        self.classifier = nn.Sequential(
+            nn.Linear(self.hidden_channels * 2, hidden_channels),
+            nn.ReLU(),
+            nn.Dropout(dropout_ratio),
+            nn.Linear(self.hidden_channels, 1),
+            nn.ReLU(),
+            nn.Dropout(dropout_ratio),
+            nn.Sigmoid(),
+        )
 
     def forward(self, data: HeteroData) -> Tensor:
         if self.feat_src == "esm_emb":
@@ -272,15 +287,15 @@ class PPIHetero(torch.nn.Module):
         # `edge_index_dict` holds all edge indices of all edge types
         # print(x_dict.dtype)
         x_dict = self.gnn(x_dict, data.edge_index_dict)
-        pred = self.classifier(
-            x_dict["pep"],
-            x_dict["prot"],
-            data["pep", "bind", "prot"].edge_label_index,
-        )
+        # pred = self.classifier(
+        #     x_dict["pep"],
+        #     x_dict["prot"],
+        #     data["pep", "bind", "prot"].edge_label_index,
+        # )
 
-        # edge_label_index = data["pep", "bind", "prot"].edge_label_index
-        # edge_feat_pep = x_dict["pep"][edge_label_index[0]]
-        # edge_feat_prot = x_dict["prot"][edge_label_index[1]]
-        # feat = torch.cat([edge_feat_pep, edge_feat_prot], dim=-1)
-        # pred = self.classifier(feat).squeeze()
+        edge_label_index = data["pep", "bind", "prot"].edge_label_index
+        edge_feat_pep = x_dict["pep"][edge_label_index[0]]
+        edge_feat_prot = x_dict["prot"][edge_label_index[1]]
+        feat = torch.cat([edge_feat_pep, edge_feat_prot], dim=-1)
+        pred = self.classifier(feat).squeeze()
         return pred
