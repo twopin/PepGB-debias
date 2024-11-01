@@ -15,7 +15,7 @@ from torch_geometric.loader import LinkNeighborLoader
 from torch_geometric.utils import coalesce, negative_sampling
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from train_pmi_split import Net
-from src.model import GNN
+from src.model_diPepGB import GNN
 from src.data import PLPMI
 
 
