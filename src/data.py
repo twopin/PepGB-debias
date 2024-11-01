@@ -9,196 +9,13 @@ from copy import copy
 import torch
 import torch_geometric.transforms as T
 from torch_geometric.utils import coalesce
-from torch_geometric.transforms import RandomLinkSplit, ToUndirected
+from torch_geometric.transforms import RandomLinkSplit
 from lightning.pytorch import LightningDataModule
-from torch_geometric.data import HeteroData, InMemoryDataset, Data
+from torch_geometric.data import (
+    HeteroData,
+    InMemoryDataset,
+)
 from torch_geometric.loader import LinkNeighborLoader
-import numpy as np
-import pandas as pd
-
-
-def load_test(
-    data_root, use_ppi=False, neg_sampling_ratio=5.0, use_random_feat=False
-):
-    # load peptide vocab
-    pep_vocab_df = pd.read_csv(
-        os.path.join(
-            data_root, "raw", "new_data_0112/PepPI_train_IDtest_pep_vocab.csv"
-        )
-    )
-    pep_vocab_dict = {
-        _row["pep_idx"]: _row["pep_seq"] for _, _row in pep_vocab_df.iterrows()
-    }
-
-    # load protein vocab
-    prot_vocab_df = pd.read_csv(
-        os.path.join(
-            data_root, "raw", "new_data_0112/PepPI_train_IDtest_prot_vocab.csv"
-        )
-    )
-    prot_vocab_dict = {
-        _row["prot_idx"]: _row["prot_seq"]
-        for _, _row in prot_vocab_df.iterrows()
-    }
-
-    # load edges
-    edges_df = pd.read_csv(
-        os.path.join(data_root, "raw", "new_data_0112/PepPI_train_IDtest.csv")
-    )
-
-    # split into train and test data
-    train_edges_df = edges_df[edges_df["flag"] == "train"]
-    test_edges_df = edges_df[edges_df["flag"] == "independent_test"]
-
-    # get number of proteins and peptides in training data
-    num_pep_train = train_edges_df["pep_idx"].max() + 1
-    num_prot_train = train_edges_df["prot_idx"].max() + 1
-
-    # load prot prot edges
-    if use_ppi:
-        print("using ppi")
-        ppi_edges_list = []
-        ppi_files = [
-            "STRING_physical_crystal_bothin_pairs_0112.csv",
-            "STRING_physical_positive_bothin_pairs_0112.csv",
-            "masif_PPI_bothin_uni_pairs_0112.csv",
-        ]
-        for _ppi_file in ppi_files:
-            _ppi_df = pd.read_csv(
-                os.path.join(
-                    data_root, "raw", "new_data_0112/{}".format(_ppi_file)
-                )
-            )
-            ppi_edges_list.append(
-                torch.tensor(
-                    [_ppi_df["Prot_A_idx"], _ppi_df["Prot_B_idx"]],
-                    dtype=torch.long,
-                )
-            )
-        ppi_edges = torch.cat(ppi_edges_list, dim=-1)
-        train_ppi_mask = (ppi_edges[0] < num_prot_train) & (
-            ppi_edges[1] < num_prot_train
-        )
-        train_ppi_edges = ppi_edges[:, train_ppi_mask]
-
-    # load neg sampels pool for test data
-    with open(
-        os.path.join(data_root, "raw", "new_data_0112/neg_edges_pool.pickle"),
-        "rb",
-    ) as fin:
-        neg_edges_pool = pickle.load(fin)
-    neg_edge_size = neg_edges_pool.shape[1]
-
-    train_data = HeteroData()
-    test_data = HeteroData()
-
-    # add feats
-    if use_random_feat:
-        pep_feats = torch.rand(len(pep_vocab_dict), 1280).to(torch.float)
-        prot_feats = torch.rand(len(prot_vocab_dict), 1280).to(torch.float)
-    else:
-        pep_feats = np.zeros((len(pep_vocab_dict), 1280), dtype=np.float32)
-        prot_feats = np.zeros((len(prot_vocab_dict), 1280), dtype=np.float32)
-        with open(
-            os.path.join(
-                data_root,
-                "raw/new_data_0112/new_feature_0112/",
-                "pep_train_IDtest_0112_finetune_len_21500_max.pickle",
-            ),
-            "rb",
-        ) as fin:
-            pep_feats_dict = pickle.load(fin)
-        with open(
-            os.path.join(
-                data_root,
-                "raw/new_data_0112/new_feature_0112/",
-                "prot_train_IDtest_0112_finetune_len__mean.pickle",
-            ),
-            "rb",
-        ) as fin:
-            prot_feats_dict = pickle.load(fin)
-        for i in range(len(pep_vocab_dict)):
-            pep_feats[i] = pep_feats_dict[pep_vocab_dict[i]]
-        for i in range(len(prot_vocab_dict)):
-            prot_feats[i] = prot_feats_dict[prot_vocab_dict[i]]
-        pep_feats = torch.from_numpy(pep_feats)
-        prot_feats = torch.from_numpy(prot_feats)
-
-    pep_feats_train = pep_feats[:num_pep_train]
-    prot_feats_train = prot_feats[:num_prot_train]
-
-    train_data["pep"].x = pep_feats_train
-    train_data["prot"].x = prot_feats_train
-
-    # add train edges
-    train_edges = torch.tensor(
-        [
-            train_edges_df["pep_idx"].tolist(),
-            train_edges_df["prot_idx"].tolist(),
-        ],
-        dtype=torch.long,
-    )
-    train_label = torch.zeros(len(train_edges_df), dtype=torch.long)
-    train_data["pep", "bind", "prot"].edge_index = train_edges
-    train_data["pep", "bind", "prot"].edge_label = train_label
-    if use_ppi:
-        _edge_index, _edge_label = coalesce(
-            train_ppi_edges,
-            torch.zeros(train_ppi_edges.shape[1], dtype=torch.long),
-            reduce="mean",
-        )
-        train_data["prot", "bind", "prot"].edge_index = _edge_index
-        train_data["prot", "bind", "prot"].edge_label = _edge_label
-
-    # add test edges and label
-    test_edges = torch.tensor(
-        [
-            test_edges_df["pep_idx"].tolist(),
-            test_edges_df["prot_idx"].tolist(),
-        ],
-        dtype=torch.long,
-    )
-    num_test_edges = test_edges.shape[1]
-
-    # sample negtive egdges
-    num_neg_mp = int(num_test_edges * neg_sampling_ratio * 2)
-    num_neg_label = int(num_test_edges * neg_sampling_ratio)
-    permed_ids = np.random.permutation(range(neg_edge_size))
-
-    neg_edges = neg_edges_pool[
-        :,
-        permed_ids[: int(num_neg_mp + num_neg_label)],
-    ]
-    test_label = torch.cat(
-        [
-            torch.ones(len(test_edges_df), dtype=torch.long),
-            torch.zeros(num_neg_label, dtype=torch.long),
-        ],
-        dim=-1,
-    )
-
-    # test_edge_label_index = torch.cat([train_edges,])
-    test_edges_mp = torch.cat(
-        [train_edges, torch.from_numpy(neg_edges[:, :num_neg_mp])], dim=-1
-    )
-    test_edges_label_index = torch.cat(
-        [test_edges, torch.from_numpy(neg_edges[:, num_neg_mp:])], dim=-1
-    )
-    test_data["pep"].x = pep_feats
-    test_data["prot"].x = prot_feats
-    test_data["pep", "bind", "prot"].edge_index = test_edges_mp
-    test_data["pep", "bind", "prot"].edge_label = test_label
-    test_data["pep", "bind", "prot"].edge_label_index = test_edges_label_index
-    if use_ppi:
-        _edge_index, _edge_label = coalesce(
-            ppi_edges,
-            torch.zeros(ppi_edges.shape[1], dtype=torch.long),
-            reduce="mean",
-        )
-        test_data["prot", "bind", "prot"].edge_index = _edge_index
-        test_data["prot", "bind", "prot"].edge_label = _edge_label
-
-    return train_data, test_data
 
 
 class ProteinPeptideInteraction(InMemoryDataset):
@@ -213,12 +30,10 @@ class ProteinPeptideInteraction(InMemoryDataset):
         pooling_method="mean",
         fold_id=1,
         pep_feat_src="finetune",
-        random_feat=False,
     ):
         self.model_name = model_name
         self.split_method = split_method
         self.use_ppi = use_ppi
-        self.random_feat = random_feat
         self.pooling_method = pooling_method
         self.fold_id = fold_id
         self.pep_feat_src = pep_feat_src
@@ -230,14 +45,14 @@ class ProteinPeptideInteraction(InMemoryDataset):
         return {
             "a": "pep_cls_net_cluster_0107_05.csv",
             "b": "pep_cls_net_cluster_wide_0107_04pep.csv",
-            "c": "new_setting_c_edges.csv",
+            "c": "pep_cls_net_cluster_wide_0107_04pair.csv",
         }
 
     @property
     def raw_file_names(self) -> List[str]:
         return [
             "prot_esm",
-            "pep_esm_finetune",  # 4000,16500,19500,21500
+            "pep_esm_finetune_len_16500",
             "prot_vocab.csv",
             "pep_vocab.csv",
             "protein_protein_link.csv",
@@ -313,20 +128,10 @@ class ProteinPeptideInteraction(InMemoryDataset):
         # peptide_feat_x = sk_normalize(peptide_feat_x, norm="l1", axis=0)
 
         # add protein data
-        if self.random_feat:
-            data["prot"].x = torch.rand(len(prot_vocab_df), 1280).to(
-                torch.float
-            )
-        else:
-            data["prot"].x = torch.from_numpy(protein_feat_x).to(torch.float)
-        # data["prot"].x = torch.zeros(len(prot_vocab_df), 1280).to(torch.float)
+        data["prot"].x = torch.from_numpy(protein_feat_x).to(torch.float)
 
         # add peptide data
-        if self.random_feat:
-            data["pep"].x = torch.rand(len(pep_vocab_df), 1280).to(torch.float)
-        else:
-            data["pep"].x = torch.from_numpy(peptide_feat_x).to(torch.float)
-        # data["pep"].x = torch.zeros(len(pep_vocab_df), 1280).to(torch.float)
+        data["pep"].x = torch.from_numpy(peptide_feat_x).to(torch.float)
         data.num_pep_nodes = len(pep_vocab_df)
         data.num_prot_nodes = len(prot_vocab_df)
 
@@ -456,9 +261,6 @@ class PLProteinPeptideInteraction(LightningDataModule):
         num_neighbors=[20, 10],
         batch_size=64,
         fold_id=0,
-        pep_feat="",
-        random_feat=False,
-        idp_test=False,
     ):
         super().__init__()
         self.root = root
@@ -477,164 +279,100 @@ class PLProteinPeptideInteraction(LightningDataModule):
         self.num_neighbors = num_neighbors
         self.batch_size = batch_size
         self.fold_id = fold_id
-        self.pep_feat = pep_feat
-        self.random_feat = random_feat
+
         if remove_cache:
             cache_dir = os.path.join(self.root, "processed")
             if os.path.exists(cache_dir):
                 shutil.rmtree(cache_dir)
-        if not idp_test:
-            dataset = ProteinPeptideInteraction(
-                root=self.root,
-                pre_transform=self.pre_transform,
-                model_name=self.model_name,
-                split_method=self.split_method,
-                use_ppi=self.use_ppi,
-                pooling_method=self.pooling_method,
-                fold_id=self.fold_id,
-                pep_feat_src=pep_feat,
-                random_feat=self.random_feat,
-            )
-
-            self.data = dataset[0]
-            self.num_prot = self.data["prot"].num_nodes
-            self.num_pep = self.data["pep"].num_nodes
-
-            # in order to let a GNN be able to pass messages in both directions.
-            # We can leverage the `T.ToUndirected()` transform for this from PyG:
-            self.data = T.ToUndirected(reduce="mean")(self.data)
-            # self.data = T.ToUndirected()(self.data)
-            # self.train_data, self.val_data = dataset.get_train_val_data(self.data)
-
-            # train_transform = T.RandomLinkSplit(
-            #     num_val=0,
-            #     num_test=0,
-            #     disjoint_train_ratio=self.disjoint_train_ratio,
-            #     # neg_sampling_ratio=self.neg_sampling_ratio,
-            #     add_negative_train_samples=False,
-            #     edge_types=("pep", "bind", "prot"),
-            #     rev_edge_types=("prot", "rev_bind", "pep"),
-            # )
-            # self.train_data, _, _ = train_transform(self.train_data)
-
-            # val_transform = T.RandomLinkSplit(
-            #     num_val=0.0,
-            #     num_test=0.0,
-            #     disjoint_train_ratio=0.0,
-            #     neg_sampling_ratio=self.neg_sampling_ratio,
-            #     add_negative_train_samples=True,
-            #     edge_types=("pep", "bind", "prot"),
-            #     rev_edge_types=("prot", "rev_bind", "pep"),
-            # )
-            # self.val_data, _, _ = val_transform(self.val_data)
-            # self.test_data = copy(self.val_data)
-
-            transform = ManualLinkSplit(
-                perm=self.data.perm,
-                num_val=self.data.num_val,
-                disjoint_train_ratio=self.disjoint_train_ratio,
-                neg_sampling_ratio=self.neg_sampling_ratio,
-                is_undirected=True,
-                add_negative_train_samples=False,
-                edge_types=("pep", "bind", "prot"),
-                rev_edge_types=("prot", "rev_bind", "pep"),
-            )
-            self.train_data, self.val_data = transform(self.data)
-            self.test_data = copy(self.val_data)
-
-        else:
-            train_data_orig, test_data = load_test(
-                self.root, self.use_ppi, self.neg_sampling_ratio
-            )
-            train_data_orig = T.ToUndirected(reduce="mean")(train_data_orig)
-            train_transform = T.RandomLinkSplit(
-                num_val=self.num_val,
-                num_test=0,
-                disjoint_train_ratio=self.disjoint_train_ratio,
-                neg_sampling_ratio=self.neg_sampling_ratio,
-                add_negative_train_samples=False,
-                edge_types=("pep", "bind", "prot"),
-                rev_edge_types=("prot", "rev_bind", "pep"),
-            )
-            self.train_data, self.val_data, _ = train_transform(train_data_orig)
-            self.test_data = T.ToUndirected(reduce="mean")(test_data)
-
-    def load_test_data(
-        self,
-    ):
-        # load edgs df
-        df = pd.read_csv(
-            os.path.join(self.root, "raw/ID_test_for_wx/ID_test_net.csv")
+        dataset = ProteinPeptideInteraction(
+            root=self.root,
+            pre_transform=self.pre_transform,
+            model_name=self.model_name,
+            split_method=self.split_method,
+            use_ppi=self.use_ppi,
+            pooling_method=self.pooling_method,
+            fold_id=self.fold_id,
         )
 
-        # get dict of peps
-        raw_pep_dict = {}
-        for _, row in df.iterrows():
-            if row["pep_idx"] not in raw_pep_dict.keys():
-                raw_pep_dict[row["pep_idx"]] = row["pep_seq"]
-        pep_dict = {k: raw_pep_dict[k] for k in range(len(raw_pep_dict))}
+        self.data = dataset[0]
+        self.num_prot = self.data["prot"].num_nodes
+        self.num_pep = self.data["pep"].num_nodes
 
-        # get dict of prots
-        raw_prot_dict = {}
-        for _, row in df.iterrows():
-            if row["prot_idx"] not in raw_prot_dict.keys():
-                raw_prot_dict[row["prot_idx"]] = row["prot_seq"]
-        prot_dict = {k: raw_prot_dict[k] for k in range(len(raw_prot_dict))}
+        # in order to let a GNN be able to pass messages in both directions.
+        # We can leverage the `T.ToUndirected()` transform for this from PyG:
+        self.data = T.ToUndirected(reduce="mean")(self.data)
+        # self.data = T.ToUndirected()(self.data)
+        # self.train_data, self.val_data = dataset.get_train_val_data(self.data)
 
-        # generate test data
-        test_data = HeteroData()
-        test_data["prot"].node_id = range(len(prot_dict))
-        test_data["pep"].node_id = range(len(pep_dict))
+        # train_transform = T.RandomLinkSplit(
+        #     num_val=0,
+        #     num_test=0,
+        #     disjoint_train_ratio=self.disjoint_train_ratio,
+        #     # neg_sampling_ratio=self.neg_sampling_ratio,
+        #     add_negative_train_samples=False,
+        #     edge_types=("pep", "bind", "prot"),
+        #     rev_edge_types=("prot", "rev_bind", "pep"),
+        # )
+        # self.train_data, _, _ = train_transform(self.train_data)
 
-        # load feats for protein
-        with open(
-            os.path.join(
-                self.root, "raw/ID_test_for_wx/prot_esm_ID_test.pickle"
-            ),
-            "rb",
-        ) as fin:
-            prot_feats_orig = pickle.load(fin)
-        prot_feats = {k: np.mean(v, axis=0) for k, v in prot_feats_orig.items()}
+        # val_transform = T.RandomLinkSplit(
+        #     num_val=0.0,
+        #     num_test=0.0,
+        #     disjoint_train_ratio=0.0,
+        #     neg_sampling_ratio=self.neg_sampling_ratio,
+        #     add_negative_train_samples=True,
+        #     edge_types=("pep", "bind", "prot"),
+        #     rev_edge_types=("prot", "rev_bind", "pep"),
+        # )
+        # self.val_data, _, _ = val_transform(self.val_data)
+        # self.test_data = copy(self.val_data)
 
-        # load feats for peptide
-        with open(
-            os.path.join(
-                self.root,
-                "raw/ID_test_for_wx/pep_simcse_ID_finetune_len_21500_mean.pickle",
-            ),
-            "rb",
-        ) as fin:
-            pep_feats = pickle.load(fin)
-
-        # add feats to test data
-        test_data["prot"].x = torch.from_numpy(
-            np.vstack([prot_feats[v] for _, v in prot_dict.items()])
-        )
-        test_data["pep"].x = torch.from_numpy(
-            np.vstack([pep_feats[v] for _, v in pep_dict.items()])
-        )
-
-        # set num of pep node and protein nodes
-        test_data.num_pep_nodes = len(pep_dict)
-        test_data.num_prot_nodes = len(prot_dict)
-        edge_index = torch.from_numpy(
-            np.array(df.loc[:, ["pep_idx", "prot_idx"]]).transpose()
-        )
-        test_data["pep", "bind", "prot"].edge_index = edge_index
-        test_data["pep", "bind", "prot"].edge_label = torch.zeros(
-            len(df), dtype=torch.long
-        )
-        test_data = ToUndirected(reduce="mean")(test_data)
-        split_transform = RandomLinkSplit(
-            num_test=0,
-            num_val=0,
-            add_negative_train_samples=True,
+        transform = ManualLinkSplit(
+            perm=self.data.perm,
+            num_val=self.data.num_val,
+            disjoint_train_ratio=self.disjoint_train_ratio,
             neg_sampling_ratio=self.neg_sampling_ratio,
+            is_undirected=True,
+            add_negative_train_samples=False,
             edge_types=("pep", "bind", "prot"),
             rev_edge_types=("prot", "rev_bind", "pep"),
-            is_undirected=True,
         )
-        self.test_data, _, _ = split_transform(test_data)
+        self.train_data, self.val_data = transform(self.data)
+
+        self.test_data = copy(self.val_data)
+
+        # self.gen_splits()
+
+    # def gen_splits(
+    #     self,
+    # ):
+    #     self.train_data = self.gen_single_split(
+    #         copy(self.data), self.data.train_mask
+    #     )
+    #     self.val_data = self.gen_single_split(
+    #         copy(self.data), self.data.val_mask
+    #     )
+    #     self.test_data = self.gen_single_split(
+    #         copy(self.data), self.data.test_mask
+    #     )
+
+    # def gen_single_split(self, in_data, mask):
+    #     in_data["pep", "bind", "prot"].edge_index = self.data[
+    #         "pep", "bind", "prot"
+    #     ].edge_index[:, mask]
+    #     in_data["pep", "bind", "prot"].edge_label_index = self.data[
+    #         "pep", "bind", "prot"
+    #     ].edge_index[:, mask]
+    #     in_data["pep", "bind", "prot"].edge_label = self.data[
+    #         "pep", "bind", "prot"
+    #     ].edge_label[mask]
+    #     in_data["prot", "rev_bind", "pep"].edge_index = self.data[
+    #         "prot", "rev_bind", "pep"
+    #     ].edge_index[:, mask]
+    #     in_data["prot", "rev_bind", "pep"].edge_label = self.data[
+    #         "prot", "rev_bind", "pep"
+    #     ].edge_label[mask]
+    #     return in_data
 
     def train_dataloader(self):
         # Define seed edges:
@@ -662,9 +400,9 @@ class PLProteinPeptideInteraction(LightningDataModule):
             num_neighbors=self.num_neighbors,
             edge_label_index=(("pep", "bind", "prot"), edge_label_index),
             edge_label=edge_label,
-            batch_size=self.batch_size * 4,
+            batch_size=self.batch_size,
             num_workers=2,
-            shuffle=True,
+            shuffle=False,
         )
 
     def test_dataloader(self):
@@ -678,9 +416,9 @@ class PLProteinPeptideInteraction(LightningDataModule):
             num_neighbors=self.num_neighbors,
             edge_label_index=(("pep", "bind", "prot"), edge_label_index),
             edge_label=edge_label,
-            batch_size=self.batch_size * 4,
+            batch_size=self.batch_size,
             num_workers=2,
-            shuffle=True,
+            shuffle=False,
         )
 
 
