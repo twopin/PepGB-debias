@@ -16,15 +16,14 @@ pip install requirments.txt
 
 ## Datasets
 
-Please refer to the `data` folder.
+Please refer to the `data` folder and download feature pickle files from https://cloud.tsinghua.edu.cn/d/c58334181c494b0eaeba/
 
 ## PepGB
 
-**NOTE: According to WangXu.**
 
 ### Training PepGB through cross-validation
 
-To train the heterogeneous GNN model PepGB for peptide-protein interaction prediction, please refer to (./ckpt/README.md) in the `ckpt` folder. 
+To train the heterogeneous GNN model PepGB for peptide-protein interaction prediction, please refer to (./ckpt/PepGB/) in the `ckpt` folder. 
 Then, run the following command:
 
 ```bash
@@ -55,4 +54,4 @@ python inference_diPepGB.py
 For inference, using the ckpt model fuile in the `ckpt` folder.
 
 ### Downloading ckpts for feature extraction
-https://cloud.tsinghua.edu.cn/d/5d43419346db4ab48007/
+https://cloud.tsinghua.edu.cn/d/c58334181c494b0eaeba/
