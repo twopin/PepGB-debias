@@ -16,7 +16,7 @@ pip install requirments.txt
 
 ## Datasets
 
-Please refer to the `data` folder and download feature pickle files from https://cloud.tsinghua.edu.cn/d/c58334181c494b0eaeba/
+Please refer to the `data` folder and download feature pickle files from https://cloud.tsinghua.edu.cn/d/7388a3702d1541b3938b/
 
 ## PepGB
 
@@ -34,11 +34,18 @@ sh train_models_c.sh # train under novel pair setting
 
 
 ### Inference using the trained PepGB ckpt 
-To predict your own data, you need to first generate ESM-based features of the peptides and proteins. Please refer to five repeated ckpts for each setting in (./ckpt/PepGB) . 
+To predict your own data, you need to first generate ESM-based features of the peptides and proteins. Please first downloaded the 5-repeated ckpt files `PepGB.zip` in https://cloud.tsinghua.edu.cn/d/7388a3702d1541b3938b/ and put them into (./ckpt/PepGB) . 
 
 Then, run the following commands for inference (a: novel protein, b: novel_peptide, c: novel_pair):
 ```bash
 sh infer_models.sh 
+```
+
+### Perturbation experiments
+
+Go to `./scripts/` and run the following command:
+```bash
+sh pertub.sh 
 ```
 
 ## diPepGB
@@ -56,4 +63,4 @@ python inference_diPepGB.py
 For inference, using the ckpt model fuile in the `ckpt` folder.
 
 ### Downloading ckpts for feature extraction
-https://cloud.tsinghua.edu.cn/d/c58334181c494b0eaeba/
+https://cloud.tsinghua.edu.cn/d/7388a3702d1541b3938b/
