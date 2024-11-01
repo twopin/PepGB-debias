@@ -187,30 +187,18 @@ def main(args):
 
     device = torch.device("cuda:{}".format(args.device))
     with mlflow.start_run() as run:
-        mlflow.log_params(
-            {
-                "disjoint_train_ratio": args.disjoint_train_ratio,
-                "dropout_ratio": args.dropout_ratio,
-                "gnn_method": args.gnn_method,
-                "neg_sampling_ratio": args.neg_sampling_ratio,
-                "feat_src": args.feat_src,
-                "pep_feat": args.pep_feat,
-                "hidden_channels": args.hidden_channels,
-                "epoch": args.epoch,
-                "beta": args.beta,
-                "dropping_methods": args.dropping_method,
-                "use_ppi": args.use_ppi,
-            }
-        )
+        run_id = run.info.run_id
+        mlflow.log_params(vars(args))
         repeat_aucs = []
         repeat_auc_stds = []
         repeat_auprs = []
         repeat_aupr_stds = []
-        for _repeat_id in range(3):
+        for _repeat_id in range(2):
             fold_aucs = []
             fold_auprs = []
             for i in range(5):
                 # for i in range(1, 2):
+                fold_id = str(i + 1)
                 data_module = PLProteinPeptideInteraction(
                     args.data_root_dir,
                     remove_cache=True,
@@ -253,7 +241,9 @@ def main(args):
                     max_epochs=args.epoch,
                     log_every_n_steps=1,
                     # callbacks=[checkpoint],
-                    default_root_dir=args.log_root_dir,
+                    default_root_dir=os.path.join(
+                        args.log_root_dir, run_id, str(_repeat_id), fold_id
+                    ),
                 )
                 # checkpoint.dir_path = os.path.join(
                 #     checkpoint.dirpath, "fold_{}".format(i + 1)

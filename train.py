@@ -1,14 +1,13 @@
-import argparse
 import os
-import shutil
-
-import torch
-import torch.nn.functional as F
-import torch_geometric.transforms as T
-from sklearn.metrics import roc_auc_score
-
 from src.data import ProteinPeptideInteraction
 from src.model import Model
+import argparse
+import torch_geometric.transforms as T
+import torch
+from sklearn.metrics import roc_auc_score
+import shutil
+
+import torch.nn.functional as F
 
 
 def train(model, optimizer, train_data, criterion):

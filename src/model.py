@@ -6,19 +6,9 @@ from torch import Tensor
 from torch.nn import Linear
 from torch_geometric.data import HeteroData
 from torch_geometric.typing import Adj
-from torch_geometric.nn import (
-    GATConv,
-    GCNConv,
-    GraphConv,
-    GINConv,
-    SAGEConv,
-    to_hetero,
-)
+from torch_geometric.nn import GATConv, GCNConv, GraphConv, SAGEConv, to_hetero
 from .dropout_gat import DropGATConv
 from torch_sparse import SparseTensor
-from torch.nn import Linear as Lin
-from torch.nn import ReLU
-from torch.nn import Sequential as Seq
 
 
 class DropBlock:
@@ -29,6 +19,7 @@ class DropBlock:
     def drop(self, x: Tensor, edge_index: Adj, drop_rate: float = 0):
         if self.dropping_method == "DropNode":
             _, x_size = x.size(0)
+            print(x_size)
             x = x * torch.bernoulli(torch.ones(x_size, 1) - drop_rate).to(
                 x.device
             )
@@ -48,24 +39,9 @@ class DropBlock:
 
 class GNN(torch.nn.Module):
     def __init__(
-        self,
-        in_channels,
-        hidden_channels,
-        gnn_method,
-        dropout_ratio,
-        dropping_method,
-        add_skip_connection,
-        num_gnn_layers,
-        add_self_loops=False,
+        self, hidden_channels, gnn_method, dropout_ratio, dropping_method
     ):
         super().__init__()
-        self.add_skip_connection = add_skip_connection
-        self.in_channels = in_channels
-        self.hidden_channels = hidden_channels
-        self.add_self_loops = add_self_loops
-        if add_skip_connection:
-            self.layer_1 = nn.Linear(in_channels, hidden_channels)
-            self.in_channels = hidden_channels
         self.dropout_ratio = dropout_ratio
         self.dropping_method = dropping_method
         if dropping_method == "DropMessage":
@@ -73,18 +49,9 @@ class GNN(torch.nn.Module):
         else:
             self.message_droprate = 0
         self.drop_block = DropBlock(self.dropping_method)
-        # self.convs = []
-        self.convs = torch.nn.ModuleList()
         if gnn_method == "sage_conv":
-            self.convs.append(
-                SAGEConv(self.in_channels, self.hidden_channels, aggr="mean")
-            )
-            for _ in range(num_gnn_layers - 1):
-                self.convs.append(
-                    SAGEConv(
-                        self.hidden_channels, self.hidden_channels, aggr="mean"
-                    )
-                )
+            self.conv1 = SAGEConv(hidden_channels, hidden_channels, aggr="mean")
+            self.conv2 = SAGEConv(hidden_channels, hidden_channels, aggr="mean")
         elif gnn_method == "gat_conv":
             # self.conv1 = GATConv(
             #     hidden_channels, hidden_channels, add_self_loops=False
@@ -93,75 +60,32 @@ class GNN(torch.nn.Module):
             #     hidden_channels, hidden_channels, add_self_loops=False
             # )
 
-            self.convs.append(
-                DropGATConv(
-                    self.in_channels,
-                    hidden_channels,
-                    add_self_loops=self.add_self_loops,
-                    message_droprate=self.message_droprate,
-                )
+            self.conv1 = DropGATConv(
+                hidden_channels,
+                hidden_channels,
+                add_self_loops=False,
+                message_droprate=self.message_droprate,
             )
-            for _ in range(num_gnn_layers - 1):
-                self.convs.append(
-                    DropGATConv(
-                        hidden_channels,
-                        hidden_channels,
-                        add_self_loops=self.add_self_loops,
-                        message_droprate=self.message_droprate,
-                    )
-                )
-        elif gnn_method == "gin_conv":
-            self.convs.append(
-                GINConv(
-                    Seq(
-                        Lin(self.in_channels, self.hidden_channels),
-                        ReLU(),
-                        Lin(self.hidden_channels, self.hidden_channels),
-                    )
-                )
+            self.conv2 = DropGATConv(
+                hidden_channels,
+                hidden_channels,
+                add_self_loops=False,
+                message_droprate=self.message_droprate,
             )
-            for _ in range(num_gnn_layers - 1):
-                self.convs.append(
-                    GINConv(
-                        Seq(
-                            Lin(self.hidden_channels, self.hidden_channels),
-                            ReLU(),
-                            Lin(self.hidden_channels, self.hidden_channels),
-                        )
-                    )
-                )
 
     def forward(self, x: Tensor, edge_index: Tensor) -> Tensor:
-        if self.add_skip_connection:
-            x = self.layer_1(x)
-            identity = x
-            x = F.relu(x)
-            x = F.dropout(x, p=self.dropout_ratio, training=self.training)
-
-        # block 1
         if self.training:
             x, edge_index = self.drop_block.drop(
                 x, edge_index, self.dropout_ratio
             )
-        # if self.add_skip_connection:
-        #     identity = x
-        x = F.relu(self.convs[0](x, edge_index))
-        x = F.dropout(x, p=self.dropout_ratio, training=self.training)
-
-        # block 2
-        for _conv in self.convs[1:]:
-            if self.training:
-                x, edge_index = self.drop_block.drop(
-                    x, edge_index, self.dropout_ratio
-                )
-            x = _conv(x, edge_index)
-            x = F.relu(x)
-            x = F.dropout(x, p=self.dropout_ratio, training=self.training)
-
-        if self.add_skip_connection:
-            x = F.relu(x + identity)
-            x = F.dropout(x, p=self.dropout_ratio, training=self.training)
-        else:
+        x = F.relu(self.conv1(x, edge_index))
+        # x = F.dropout(x, p=self.dropout_ratio, training=self.training)
+        if self.training:
+            x, edge_index = self.drop_block.drop(
+                x, edge_index, self.dropout_ratio
+            )
+        x = self.conv2(x, edge_index)
+        if self.dropping_method == "Dropout":
             x = F.dropout(x, p=self.dropout_ratio, training=self.training)
         return x
 
@@ -169,19 +93,6 @@ class GNN(torch.nn.Module):
 # Our final classifier applies the dot-product between source and destination
 # node embeddings to derive edge-level predictions:
 class Classifier(torch.nn.Module):
-    def __init__(self, input_size):
-        super(Classifier, self).__init__()
-        self.model = nn.Sequential(
-            nn.Linear(input_size, int(input_size / 2)),  # First hidden layer
-            nn.ReLU(),  # Activation function for first hidden layer
-            nn.Linear(
-                int(input_size / 2), int(input_size / 4)
-            ),  # Second hidden layer
-            nn.ReLU(),  # Activation function for second hidden layer
-            nn.Linear(int(input_size / 4), 1),  # Output layer
-            nn.Sigmoid(),
-        )
-
     def forward(
         self, x_pep: Tensor, x_prot: Tensor, edge_label_index: Tensor
     ) -> Tensor:
@@ -189,65 +100,42 @@ class Classifier(torch.nn.Module):
         edge_feat_pep = x_pep[edge_label_index[0]]
         edge_feat_prot = x_prot[edge_label_index[1]]
         # Apply dot-product to get a prediction per supervision edge:
-        return torch.cat([edge_feat_pep, edge_feat_prot]).sum(dim=-1)
+        return (edge_feat_pep * edge_feat_prot).sum(dim=-1)
 
 
 class PPIHetero(torch.nn.Module):
     def __init__(
         self,
-        in_channels,
         hidden_channels,
+        num_pep_nodes,
+        num_prot_nodes,
         metadata,
         gnn_method,
         dropout_ratio,
         feat_src,
         dropping_method,
-        add_skip_connection,
-        num_gnn_layers,
     ):
         super().__init__()
         # Since the dataset does not come with rich features, we also learn two
         # embedding matrices for peps and prots:
-        # self.prot_lin = torch.nn.Linear(1280, hidden_channels)
-        # self.pep_lin = torch.nn.Linear(1280, hidden_channels)
-        # self.pep_emb = torch.nn.Embedding(num_pep_nodes, hidden_channels)
-        # self.prot_emb = torch.nn.Embedding(num_prot_nodes, hidden_channels)
-        self.hidden_channels = hidden_channels
+        self.prot_lin = torch.nn.Linear(1280, hidden_channels)
+        self.pep_lin = torch.nn.Linear(1280, hidden_channels)
+        self.pep_emb = torch.nn.Embedding(num_pep_nodes, hidden_channels)
+        self.prot_emb = torch.nn.Embedding(num_prot_nodes, hidden_channels)
         self.feat_src = feat_src
         # Instantiate homogeneous GNN:
         if self.feat_src == "esm_emb":
             self.gnn = GNN(
-                in_channels * 2,
-                hidden_channels,
-                gnn_method,
-                dropout_ratio,
-                dropping_method,
-                add_skip_connection,
-                num_gnn_layers,
+                hidden_channels * 2, gnn_method, dropout_ratio, dropping_method
             )
         else:
             self.gnn = GNN(
-                in_channels,
-                hidden_channels,
-                gnn_method,
-                dropout_ratio,
-                dropping_method,
-                add_skip_connection,
-                num_gnn_layers,
+                hidden_channels, gnn_method, dropout_ratio, dropping_method
             )
 
         # Convert GNN model into a heterogeneous variant:
         self.gnn = to_hetero(self.gnn, metadata=metadata, debug=False)
-        # self.classifier = Classifier()
-        self.classifier = nn.Sequential(
-            nn.Linear(self.hidden_channels * 2, hidden_channels),
-            nn.ReLU(),
-            nn.Dropout(dropout_ratio),
-            nn.Linear(self.hidden_channels, 1),
-            nn.ReLU(),
-            nn.Dropout(dropout_ratio),
-            nn.Sigmoid(),
-        )
+        self.classifier = Classifier()
 
     def forward(self, data: HeteroData) -> Tensor:
         if self.feat_src == "esm_emb":
@@ -275,27 +163,16 @@ class PPIHetero(torch.nn.Module):
             }
         elif self.feat_src == "esm":
             # orig feature
-            # x_dict = {
-            #     "pep": self.pep_lin(data["pep"].x),
-            #     "prot": self.prot_lin(data["prot"].x),
-            # }
             x_dict = {
-                "pep": data["pep"].x,
-                "prot": data["prot"].x,
+                "pep": self.pep_lin(data["pep"].x),
+                "prot": self.prot_lin(data["prot"].x),
             }
         # `x_dict` holds feature matrices of all node types
         # `edge_index_dict` holds all edge indices of all edge types
-        # print(x_dict.dtype)
         x_dict = self.gnn(x_dict, data.edge_index_dict)
-        # pred = self.classifier(
-        #     x_dict["pep"],
-        #     x_dict["prot"],
-        #     data["pep", "bind", "prot"].edge_label_index,
-        # )
-
-        edge_label_index = data["pep", "bind", "prot"].edge_label_index
-        edge_feat_pep = x_dict["pep"][edge_label_index[0]]
-        edge_feat_prot = x_dict["prot"][edge_label_index[1]]
-        feat = torch.cat([edge_feat_pep, edge_feat_prot], dim=-1)
-        pred = self.classifier(feat).squeeze()
+        pred = self.classifier(
+            x_dict["pep"],
+            x_dict["prot"],
+            data["pep", "bind", "prot"].edge_label_index,
+        )
         return pred

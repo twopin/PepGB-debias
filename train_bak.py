@@ -1,11 +1,10 @@
-import argparse
-
-import torch
-import torch.nn.functional as F
-import torch_geometric.transforms as T
-
 from src.data import ProteinPeptideInteraction
 from src.model import Model
+import argparse
+import torch_geometric.transforms as T
+import torch
+
+import torch.nn.functional as F
 
 
 def weighted_mse_loss(pred, target, weight=None):

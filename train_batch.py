@@ -1,18 +1,19 @@
+import torch.nn.functional as F
+import pandas as pd
+from torch_geometric.data import download_url, extract_zip
+from torch_geometric.data import HeteroData
+import torch_geometric.transforms as T
+import torch
+from torch_geometric.loader import LinkNeighborLoader
+from torch import Tensor
+
+from torch_geometric.nn import SAGEConv, to_hetero
+import torch.nn.functional as F
+from src.data import ProteinPeptideInteraction
 import os
 import shutil
-
-import pandas as pd
-import torch
-import torch.nn.functional as F
-import torch_geometric.transforms as T
 import tqdm
 from sklearn.metrics import roc_auc_score
-from torch import Tensor
-from torch_geometric.data import HeteroData, download_url, extract_zip
-from torch_geometric.loader import LinkNeighborLoader
-from torch_geometric.nn import SAGEConv, to_hetero
-
-from src.data import ProteinPeptideInteraction
 
 if os.path.exists("./data/yipin_protein_peptide/processed"):
     shutil.rmtree("./data/yipin_protein_peptide/processed")

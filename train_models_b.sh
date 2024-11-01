@@ -8,14 +8,16 @@ cuda_devices=$1
 # feat_srcs=(esm )
 # hidden_channels=(256 512)
 # betas=(0.3 0.4 0.5)
-# dropping_methods=(DropMessage)
+# dropping_methods=(Dropout DropMessage)
 
+
+split_method=b
 dropout_ratios=(0.5)
-disjoint_train_ratios=(0.4)
+disjoint_train_ratios=(0.5)
 gnn_methods=(gat_conv)
-feat_srcs=(esm)
+feat_srcs=(esm )
 hidden_channels=(512)
-betas=(0.4)
+betas=(0.5)
 dropping_methods=(DropMessage)
 
 for feat_src in "${feat_srcs[@]}"; do
@@ -25,22 +27,16 @@ for feat_src in "${feat_srcs[@]}"; do
                 for hidden_channel  in "${hidden_channels[@]}"; do
                     for beta in "${betas[@]}"; do
                         for dropping_method in "${dropping_methods[@]}"; do
-                            python train_batch_pl.py  --gnn_method $gnn_method \
+                            python train_batch_pl_ckpts.py  --gnn_method $gnn_method \
+                            --split_method $split_method \
                             --disjoint_train_ratio $disjoint_train_ratio \
                             --dropout_ratio $dropout_ratio \
-                            --in_channels 1280 \
-                            --split_method b \
-                            --data_root_dir ./data_transfer/yipin_protein_peptide_b \
-                            --neg_sampling_ratio 5.0 \
+                            --data_root_dir ./data/yipin_protein_peptide_$split_method \
                             --feat_src $feat_src \
                             --device $cuda_devices \
-                            --exp_name exp_1029 \
-                            --add_skip_connection \
                             --hidden_channels $hidden_channel \
                             --dropping_method $dropping_method \
-                            --gnn_layers 2 \
-                            --beta $beta \
-                            --log_root_dir /data/logs/ppi_graph
+                            --beta $beta
                         done
                     done
                 done
@@ -48,4 +44,3 @@ for feat_src in "${feat_srcs[@]}"; do
         done
     done
 done
-

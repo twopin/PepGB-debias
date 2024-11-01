@@ -1,20 +1,22 @@
 import shutil
-from typing import Dict, List, Tuple
-
-import torch
-import torch.nn.functional as F
-import torch_geometric.transforms as T
-from lightning.pytorch import LightningModule, Trainer
-from lightning.pytorch.callbacks import ModelCheckpoint
-from sklearn.metrics import auc, precision_recall_curve
-from torch import Tensor
-from torch_geometric.data import Batch
-from torch_geometric.data.lightning import LightningLinkData
-from torch_geometric.typing import EdgeType, NodeType
-from torchmetrics import AUROC, ROC
-
 from src.data import PLProteinPeptideInteraction, ProteinPeptideInteraction
 from src.model import PPIHetero
+from torchmetrics import AUROC, ROC
+from sklearn.metrics import precision_recall_curve, auc
+from typing import Dict, List, Tuple
+from torch import Tensor
+import torch_geometric.transforms as T
+
+from torch_geometric.typing import EdgeType, NodeType
+from torch_geometric.data import Batch
+import torch.nn.functional as F
+import torch
+from lightning.pytorch import (
+    LightningModule,
+    Trainer,
+)
+from lightning.pytorch.callbacks import ModelCheckpoint
+from torch_geometric.data.lightning import LightningLinkData
 
 
 class PLPPIHetero(LightningModule):

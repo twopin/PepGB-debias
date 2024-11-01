@@ -1,15 +1,12 @@
 import os
 import os.path as osp
 import pickle
+from copy import copy
 import shutil
 from typing import Any, Callable, List, Optional
-from .manuall_split import ManualLinkSplit
-from copy import copy
 
 import torch
 import torch_geometric.transforms as T
-from torch_geometric.utils import coalesce
-from torch_geometric.transforms import RandomLinkSplit
 from lightning.pytorch import LightningDataModule
 from torch_geometric.data import (
     HeteroData,
@@ -25,34 +22,22 @@ class ProteinPeptideInteraction(InMemoryDataset):
         transform=None,
         pre_transform=None,
         model_name=None,
-        split_method=True,
+        random_split=True,
         use_ppi=True,
         pooling_method="mean",
-        fold_id=1,
-        pep_feat_src="finetune",
     ):
         self.model_name = model_name
-        self.split_method = split_method
+        self.random_split = random_split
         self.use_ppi = use_ppi
         self.pooling_method = pooling_method
-        self.fold_id = fold_id
-        self.pep_feat_src = pep_feat_src
         super().__init__(root, transform, pre_transform)
         self.data, self.slices = torch.load(self.processed_paths[0])
-
-    @property
-    def split_methods(self):
-        return {
-            "a": "pep_cls_net_cluster_0107_05.csv",
-            "b": "pep_cls_net_cluster_wide_0107_04pep.csv",
-            "c": "pep_cls_net_cluster_wide_0107_04pair.csv",
-        }
 
     @property
     def raw_file_names(self) -> List[str]:
         return [
             "prot_esm",
-            "pep_esm_finetune_len_16500",
+            "pep_esm",
             "prot_vocab.csv",
             "pep_vocab.csv",
             "protein_protein_link.csv",
@@ -63,9 +48,10 @@ class ProteinPeptideInteraction(InMemoryDataset):
     @property
     def processed_file_names(self) -> str:
         file_name = "data"
-
-        # add split method
-        file_name += "_split_{}".format(self.split_method)
+        if self.random_split:
+            file_name += "_randomsplit"
+        else:
+            file_name += "_customsplit"
 
         if self.use_ppi:
             file_name += "_useppi"
@@ -89,8 +75,6 @@ class ProteinPeptideInteraction(InMemoryDataset):
             split_path,
         ) = self.raw_paths
         # load peptide and protein data
-        if self.pep_feat_src != "finetune":
-            peptide_feat_path.replace("_finetune", "")
 
         with open(
             protein_feat_path + "_{0}.pickle".format(self.pooling_method),
@@ -132,75 +116,40 @@ class ProteinPeptideInteraction(InMemoryDataset):
 
         # add peptide data
         data["pep"].x = torch.from_numpy(peptide_feat_x).to(torch.float)
-        data.num_pep_nodes = len(pep_vocab_df)
-        data.num_prot_nodes = len(prot_vocab_df)
 
         # one-hot for embedding learning
         # data["prot"].x = torch.arange(0, len(prot_vocab_df))
         # data["pep"].x = torch.arange(0, len(pep_vocab_df))
 
-        # load connections,splited
-        # edges_df = pd.read_csv(
-        #     "./data/yipin_protein_peptide/raw/pep_cls_net_cluster_0107_04pair.csv",
-        # )
+        # load connections no split
         edges_df = pd.read_csv(
-            os.path.join(
-                self.root, "raw", self.split_methods[self.split_method]
-            )
+            "./data/yipin_protein_peptide/raw/pep_cls_net.csv", sep="\t"
         )
-        edges = np.array(edges_df.loc[:, ["pep_idx", "prot_idx"]]).transpose()
-        # src = edges_df["pep_idx"].tolist()
-        # dst = edges_df["prot_idx"].tolist()
-        #     edges_df["Fold{}_split".format(self.fold_id)] == "test"
-        # )
-        data["pep", "bind", "prot"].edge_index = torch.tensor(edges)
+        pep_prot_edges = [
+            eval(_edge) for _edge in edges_df["pep_src_prot_dst"].tolist()
+        ]
+        pep_prot_edges = torch.tensor(np.transpose(pep_prot_edges))
+        data["pep", "bind", "prot"].edge_index = pep_prot_edges
         data["pep", "bind", "prot"].edge_label = torch.zeros(
             len(edges_df), dtype=torch.long
         )
 
-        data.perm = np.hstack(
-            [
-                np.argwhere(
-                    (edges_df["Fold{}_split".format(self.fold_id)] == "train")
-                ).flatten(),
-                np.argwhere(
-                    (edges_df["Fold{}_split".format(self.fold_id)] == "test")
-                ).flatten(),
-            ]
-        )
-        data.num_val = (
-            np.argwhere(
-                (edges_df["Fold{}_split".format(self.fold_id)] == "test")
-            )
-            .flatten()
-            .shape[0]
-        )
-
-        # add protein protein link
-        if self.use_ppi:
-            edges_df = pd.read_csv(
-                os.path.join(
-                    self.root,
-                    "raw",
-                    "STRING_physical_positive_bothin_pairs.csv",
-                )
-            )
-            edges = np.array(
-                edges_df.loc[:, ["Prot_A_idx", "Prot_B_idx"]]
-            ).transpose()
-            _edge_index, _edge_label = coalesce(
-                torch.tensor(edges),
-                torch.zeros(len(edges_df), dtype=torch.long),
-                reduce="mean",
-            )
-
-            data["prot", "bind", "prot"].edge_index = _edge_index
-            data["prot", "bind", "prot"].edge_label = _edge_label
-
-        # data["prot", "bind", "prot"] = data["prot", "bind", "prot"].coalesce()
-
+        # load connections,splited
+        # edges_df = pd.read_csv(
+        #     "./data/yipin_protein_peptide/raw/pep_cls_net_cluster_0107_05.csv",
+        # )
+        # src = edges_df["pep_idx"].tolist()
+        # dst = edges_df["prot_idx"].tolist()
+        # train_mask = torch.tensor(edges_df["Fold1_split"] == "train")
+        # val_mask = torch.tensor(edges_df["Fold1_split"] == "test")
+        # test_mask = torch.tensor(edges_df["Fold1_split"] == "test")
+        # data["pep", "bind", "prot"].edge_index = torch.tensor([src, dst])
+        # data["pep", "bind", "prot"].edge_label = torch.zeros(
+        #     len(edges_df), dtype=torch.long
+        # )
         # data.train_mask = train_mask
         # data.val_mask = val_mask
+        # data.test_mask = test_mask
 
         # data = data.to_homogeneous()
         # edge_index_new = torch.zeros_like(data.edge_index)
@@ -213,34 +162,6 @@ class ProteinPeptideInteraction(InMemoryDataset):
 
         torch.save(self.collate([data]), self.processed_paths[0])
 
-    def _split_by_mask(self, data, mask):
-        res_data = copy(data)
-        # edge index
-        res_data["pep", "bind", "prot"]["edge_index"] = data[
-            "pep", "bind", "prot"
-        ]["edge_index"][:, mask]
-
-        # edge mask
-        res_data["pep", "bind", "prot"]["edge_label"] = data[
-            "pep", "bind", "prot"
-        ]["edge_label"][mask]
-
-        # edge index
-        res_data["prot", "rev_bind", "pep"]["edge_index"] = data[
-            "prot", "rev_bind", "pep"
-        ]["edge_index"][:, mask]
-
-        # edge mask
-        res_data["prot", "rev_bind", "pep"]["edge_label"] = data[
-            "prot", "rev_bind", "pep"
-        ]["edge_label"][mask]
-        return res_data
-
-    def get_train_val_data(self, data):
-        train_data = self._split_by_mask(data, data.train_mask)
-        val_data = self._split_by_mask(data, data.val_mask)
-        return train_data, val_data
-
 
 class PLProteinPeptideInteraction(LightningDataModule):
     def __init__(
@@ -249,25 +170,24 @@ class PLProteinPeptideInteraction(LightningDataModule):
         transform=None,
         pre_transform=None,
         model_name=None,
-        split_method="a",
+        random_split=True,
         use_ppi=True,
         pooling_method="mean",
         remove_cache=True,
         num_val=0.1,
         num_test=0.1,
-        disjoint_train_ratio=0.3,
+        disjoint_train_ratio=0.0,
         neg_sampling_ratio=2.0,
         add_negative_train_samples=False,
         num_neighbors=[20, 10],
         batch_size=64,
-        fold_id=0,
     ):
         super().__init__()
         self.root = root
         self.transform = transform
         self.pre_transform = pre_transform
         self.model_name = model_name
-        self.split_method = split_method
+        self.random_split = random_split
         self.use_ppi = use_ppi
         self.pooling_method = pooling_method
         self.remove_cache = remove_cache
@@ -278,20 +198,17 @@ class PLProteinPeptideInteraction(LightningDataModule):
         self.add_negative_train_samples = add_negative_train_samples
         self.num_neighbors = num_neighbors
         self.batch_size = batch_size
-        self.fold_id = fold_id
-
         if remove_cache:
             cache_dir = os.path.join(self.root, "processed")
             if os.path.exists(cache_dir):
                 shutil.rmtree(cache_dir)
         dataset = ProteinPeptideInteraction(
-            root=self.root,
-            pre_transform=self.pre_transform,
-            model_name=self.model_name,
-            split_method=self.split_method,
-            use_ppi=self.use_ppi,
-            pooling_method=self.pooling_method,
-            fold_id=self.fold_id,
+            self.root,
+            self.pre_transform,
+            self.model_name,
+            self.random_split,
+            self.use_ppi,
+            self.pooling_method,
         )
 
         self.data = dataset[0]
@@ -300,79 +217,53 @@ class PLProteinPeptideInteraction(LightningDataModule):
 
         # in order to let a GNN be able to pass messages in both directions.
         # We can leverage the `T.ToUndirected()` transform for this from PyG:
-        self.data = T.ToUndirected(reduce="mean")(self.data)
-        # self.data = T.ToUndirected()(self.data)
-        # self.train_data, self.val_data = dataset.get_train_val_data(self.data)
+        self.data = T.ToUndirected()(self.data)
+        # self.train_data, self.val_data, self.test_data = self.gen_splits()
+        # self.gen_splits()
 
-        # train_transform = T.RandomLinkSplit(
-        #     num_val=0,
-        #     num_test=0,
-        #     disjoint_train_ratio=self.disjoint_train_ratio,
-        #     # neg_sampling_ratio=self.neg_sampling_ratio,
-        #     add_negative_train_samples=False,
-        #     edge_types=("pep", "bind", "prot"),
-        #     rev_edge_types=("prot", "rev_bind", "pep"),
-        # )
-        # self.train_data, _, _ = train_transform(self.train_data)
-
-        # val_transform = T.RandomLinkSplit(
-        #     num_val=0.0,
-        #     num_test=0.0,
-        #     disjoint_train_ratio=0.0,
-        #     neg_sampling_ratio=self.neg_sampling_ratio,
-        #     add_negative_train_samples=True,
-        #     edge_types=("pep", "bind", "prot"),
-        #     rev_edge_types=("prot", "rev_bind", "pep"),
-        # )
-        # self.val_data, _, _ = val_transform(self.val_data)
-        # self.test_data = copy(self.val_data)
-
-        transform = ManualLinkSplit(
-            perm=self.data.perm,
-            num_val=self.data.num_val,
+        transform = T.RandomLinkSplit(
+            num_val=self.num_val,
+            num_test=self.num_test,
             disjoint_train_ratio=self.disjoint_train_ratio,
             neg_sampling_ratio=self.neg_sampling_ratio,
-            is_undirected=True,
-            add_negative_train_samples=False,
+            add_negative_train_samples=self.add_negative_train_samples,
             edge_types=("pep", "bind", "prot"),
             rev_edge_types=("prot", "rev_bind", "pep"),
         )
-        self.train_data, self.val_data = transform(self.data)
+        self.train_data, self.val_data, self.test_data = transform(self.data)
+        with open("tmp/data_back.pickle", "wb") as fout:
+            pickle.dump(self.test_data, fout)
 
-        self.test_data = copy(self.val_data)
+    def gen_splits(
+        self,
+    ):
+        self.train_data = self.gen_single_split(
+            copy(self.data), self.data.train_mask
+        )
+        self.val_data = self.gen_single_split(
+            copy(self.data), self.data.val_mask
+        )
+        self.test_data = self.gen_single_split(
+            copy(self.data), self.data.test_mask
+        )
 
-        # self.gen_splits()
-
-    # def gen_splits(
-    #     self,
-    # ):
-    #     self.train_data = self.gen_single_split(
-    #         copy(self.data), self.data.train_mask
-    #     )
-    #     self.val_data = self.gen_single_split(
-    #         copy(self.data), self.data.val_mask
-    #     )
-    #     self.test_data = self.gen_single_split(
-    #         copy(self.data), self.data.test_mask
-    #     )
-
-    # def gen_single_split(self, in_data, mask):
-    #     in_data["pep", "bind", "prot"].edge_index = self.data[
-    #         "pep", "bind", "prot"
-    #     ].edge_index[:, mask]
-    #     in_data["pep", "bind", "prot"].edge_label_index = self.data[
-    #         "pep", "bind", "prot"
-    #     ].edge_index[:, mask]
-    #     in_data["pep", "bind", "prot"].edge_label = self.data[
-    #         "pep", "bind", "prot"
-    #     ].edge_label[mask]
-    #     in_data["prot", "rev_bind", "pep"].edge_index = self.data[
-    #         "prot", "rev_bind", "pep"
-    #     ].edge_index[:, mask]
-    #     in_data["prot", "rev_bind", "pep"].edge_label = self.data[
-    #         "prot", "rev_bind", "pep"
-    #     ].edge_label[mask]
-    #     return in_data
+    def gen_single_split(self, in_data, mask):
+        in_data["pep", "bind", "prot"].edge_index = self.data[
+            "pep", "bind", "prot"
+        ].edge_index[:, mask]
+        in_data["pep", "bind", "prot"].edge_label_index = self.data[
+            "pep", "bind", "prot"
+        ].edge_index[:, mask]
+        in_data["pep", "bind", "prot"].edge_label = self.data[
+            "pep", "bind", "prot"
+        ].edge_label[mask]
+        in_data["prot", "rev_bind", "pep"].edge_index = self.data[
+            "prot", "rev_bind", "pep"
+        ].edge_index[:, mask]
+        in_data["prot", "rev_bind", "pep"].edge_label = self.data[
+            "prot", "rev_bind", "pep"
+        ].edge_label[mask]
+        return in_data
 
     def train_dataloader(self):
         # Define seed edges:
@@ -383,8 +274,12 @@ class PLProteinPeptideInteraction(LightningDataModule):
         return LinkNeighborLoader(
             data=self.train_data,
             num_neighbors=self.num_neighbors,
+            # disjoint=self.disjoint_train_ratio,
             neg_sampling_ratio=self.neg_sampling_ratio,
-            edge_label_index=(("pep", "bind", "prot"), edge_label_index),
+            edge_label_index=(
+                ("pep", "bind", "prot"),
+                edge_label_index,
+            ),
             edge_label=edge_label,
             batch_size=self.batch_size,
             shuffle=True,
@@ -395,10 +290,12 @@ class PLProteinPeptideInteraction(LightningDataModule):
         edge_label_index = self.val_data["pep", "bind", "prot"].edge_label_index
 
         edge_label = self.val_data["pep", "bind", "prot"].edge_label
+        print(edge_label)
         return LinkNeighborLoader(
             data=self.val_data,
             num_neighbors=self.num_neighbors,
             edge_label_index=(("pep", "bind", "prot"), edge_label_index),
+            neg_sampling_ratio=self.neg_sampling_ratio,
             edge_label=edge_label,
             batch_size=self.batch_size,
             num_workers=2,
@@ -414,8 +311,12 @@ class PLProteinPeptideInteraction(LightningDataModule):
         return LinkNeighborLoader(
             data=self.test_data,
             num_neighbors=self.num_neighbors,
-            edge_label_index=(("pep", "bind", "prot"), edge_label_index),
+            edge_label_index=(
+                ("pep", "bind", "prot"),
+                edge_label_index,
+            ),
             edge_label=edge_label,
+            neg_sampling_ratio=self.neg_sampling_ratio,
             batch_size=self.batch_size,
             num_workers=2,
             shuffle=False,

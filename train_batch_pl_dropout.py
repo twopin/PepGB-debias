@@ -2,7 +2,9 @@ import shutil
 import numpy as np
 import os
 from src.data import PLProteinPeptideInteraction
-from src.model import PPIHetero
+
+# from src.model import PPIHetero
+from src.dropout_model.model import PPIHetero
 from torchmetrics import AUROC, ROC
 from sklearn.metrics import precision_recall_curve, auc
 from typing import Dict, List, Tuple
@@ -41,8 +43,6 @@ class PLPPIHetero(LightningModule):
         device,
         optimizer,
         lr,
-        dropping_method,
-        repeat_id,
     ):
         super().__init__()
         self.model = PPIHetero(
@@ -53,10 +53,8 @@ class PLPPIHetero(LightningModule):
             gnn_method,
             dropout_ratio,
             feat_src,
-            dropping_method,
         )
         self.fold_idx = fold_idx
-        self.repeat_id = repeat_id
         self.val_auc = AUROC(task="binary")
         self.test_auc = AUROC(task="binary")
         self.val_aupr = ROC(task="binary")
@@ -96,9 +94,7 @@ class PLPPIHetero(LightningModule):
             y_pred, y.float()
         ) + (1 - self.beta) * self.auc_loss(torch.sigmoid(y_pred), y.float())
         self.log(
-            "{}_loss_fold_{}_repeat".format(
-                stage, self.fold_idx, self.repeat_id
-            ),
+            "{}_loss_fold_{}".format(stage, self.fold_idx),
             loss,
             prog_bar=True,
             on_step=True,
@@ -130,14 +126,14 @@ class PLPPIHetero(LightningModule):
         aupr = auc(recall, precision) * 100
 
         self.log(
-            "val_auc_fold_{}_repeat_{}".format(self.fold_idx, self.repeat_id),
+            "val_auc_fold_{}".format(self.fold_idx),
             auc_v,
             prog_bar=True,
             on_step=False,
             on_epoch=True,
         )
         self.log(
-            "val_aupr_fold_{}_repeat_{}".format(self.fold_idx, self.repeat_id),
+            "val_aupr_fold_{}".format(self.fold_idx),
             aupr,
             prog_bar=True,
             on_step=False,
@@ -154,14 +150,14 @@ class PLPPIHetero(LightningModule):
         aupr = auc(recall, precision) * 100
 
         self.log(
-            "test_auc_fold_{}_repeat_{}".format(self.fold_idx, self.repeat_id),
+            "test_auc_{}".format(self.fold_idx),
             auc_v,
             prog_bar=True,
             on_step=False,
             on_epoch=True,
         )
         self.log(
-            "test_aupr_fold_{}_repeat_{}".format(self.fold_idx, self.repeat_id),
+            "test_aupr_{}".format(self.fold_idx),
             aupr,
             prog_bar=True,
             on_step=False,
@@ -179,9 +175,9 @@ class PLPPIHetero(LightningModule):
 def main(args):
     model = None
 
-    mlflow.set_tracking_uri("http://10.28.0.57:45000")
+    mlflow.set_tracking_uri("http://192.168.1.237:45001")
     mlflow.set_experiment(
-        "ppi_graph_1101_{}".format(args.split_method)
+        "ppi_graph_dropout_no_protein_inner_{}".format(args.split_method)
     )  # set the experiment
     mlflow.pytorch.autolog()
 
@@ -198,99 +194,65 @@ def main(args):
                 "hidden_channels": args.hidden_channels,
                 "epoch": args.epoch,
                 "beta": args.beta,
-                "dropping_methods": args.dropping_method,
-                "use_ppi": args.use_ppi,
             }
         )
-        repeat_aucs = []
-        repeat_auc_stds = []
-        repeat_auprs = []
-        repeat_aupr_stds = []
-        for _repeat_id in range(3):
-            fold_aucs = []
-            fold_auprs = []
-            for i in range(5):
-                # for i in range(1, 2):
-                data_module = PLProteinPeptideInteraction(
-                    args.data_root_dir,
-                    remove_cache=True,
-                    batch_size=args.batch_size,
-                    disjoint_train_ratio=args.disjoint_train_ratio,
-                    neg_sampling_ratio=args.neg_sampling_ratio,
-                    pooling_method=args.pooling_method,
-                    split_method=args.split_method,
-                    fold_id=i + 1,
-                )
-                num_prot = data_module.data["prot"]["node_id"].shape[0]
-                num_pep = data_module.data["pep"]["node_id"].shape[0]
-                metadata = data_module.data.metadata()
-                # checkpoint = ModelCheckpoint(
-                #     monitor="val_auc",
-                #     save_top_k=2,
-                #     mode="max",
-                #     filename="{epoch:03d}-{val_auc:.2f}",
-                # )
-                if model is not None:
-                    del model
-                model = PLPPIHetero(
-                    args.hidden_channels,
-                    num_pep,
-                    num_prot,
-                    metadata,
-                    args.gnn_method,
-                    args.dropout_ratio,
-                    i,
-                    args.feat_src,
-                    args.beta,
-                    device,
-                    args.optimizer,
-                    args.lr,
-                    args.dropping_method,
-                    _repeat_id,
-                )
-                trainer = Trainer(
-                    devices=[args.device],
-                    max_epochs=args.epoch,
-                    log_every_n_steps=1,
-                    # callbacks=[checkpoint],
-                    default_root_dir=args.log_root_dir,
-                )
-                # checkpoint.dir_path = os.path.join(
-                #     checkpoint.dirpath, "fold_{}".format(i + 1)
-                # )
-                trainer.fit(model, data_module)
-                res = trainer.test(model, data_module)[0]
-                fold_aucs.append(
-                    res["test_auc_fold_{}_repeat_{}".format(i, _repeat_id)]
-                )
-                fold_auprs.append(
-                    res["test_aupr_fold_{}_repeat_{}".format(i, _repeat_id)]
-                )
-            auc_mean = np.mean(fold_aucs)
-            auc_std = np.std(fold_aucs)
-            aupr_mean = np.mean(fold_auprs)
-            aupr_std = np.std(fold_auprs)
-
-            repeat_aucs.append(auc_mean)
-            repeat_auc_stds.append(auc_std)
-            repeat_auprs.append(aupr_mean)
-            repeat_aupr_stds.append(aupr_std)
-            mlflow.log_metric(
-                "test_auc_mean_repeat_{}".format(_repeat_id), auc_mean
+        aucs = []
+        auprs = []
+        for i in range(5):
+            # for i in range(1, 2):
+            data_module = PLProteinPeptideInteraction(
+                args.data_root_dir,
+                remove_cache=True,
+                batch_size=args.batch_size,
+                disjoint_train_ratio=args.disjoint_train_ratio,
+                neg_sampling_ratio=args.neg_sampling_ratio,
+                pooling_method=args.pooling_method,
+                split_method=args.split_method,
+                fold_id=i + 1,
             )
-            mlflow.log_metric(
-                "test_auc_std_repeat_{}".format(_repeat_id), auc_std
+            num_prot = data_module.data["prot"]["node_id"].shape[0]
+            num_pep = data_module.data["pep"]["node_id"].shape[0]
+            metadata = data_module.data.metadata()
+            # checkpoint = ModelCheckpoint(
+            #     monitor="val_auc",
+            #     save_top_k=2,
+            #     mode="max",
+            #     filename="{epoch:03d}-{val_auc:.2f}",
+            # )
+            if model is not None:
+                del model
+            model = PLPPIHetero(
+                args.hidden_channels,
+                num_pep,
+                num_prot,
+                metadata,
+                args.gnn_method,
+                args.dropout_ratio,
+                i,
+                args.feat_src,
+                args.beta,
+                device,
+                args.optimizer,
+                args.lr,
             )
-            mlflow.log_metric(
-                "test_aupr_mean_repeat_{}".format(_repeat_id), aupr_mean
+            trainer = Trainer(
+                devices=[args.device],
+                max_epochs=args.epoch,
+                log_every_n_steps=1,
+                # callbacks=[checkpoint],
+                default_root_dir=args.log_root_dir,
             )
-            mlflow.log_metric(
-                "test_aupr_std_repeat_{}".format(_repeat_id), aupr_std
-            )
-        auc_mean = np.mean(repeat_aucs)
-        auc_std = np.mean(repeat_auc_stds)
-        aupr_mean = np.mean(repeat_auprs)
-        aupr_std = np.mean(repeat_aupr_stds)
+            # checkpoint.dir_path = os.path.join(
+            #     checkpoint.dirpath, "fold_{}".format(i + 1)
+            # )
+            trainer.fit(model, data_module)
+            res = trainer.test(model, data_module)[0]
+            aucs.append(res["test_auc_{}".format(i)])
+            auprs.append(res["test_aupr_{}".format(i)])
+        auc_mean = np.mean(aucs)
+        auc_std = np.std(aucs)
+        aupr_mean = np.mean(auprs)
+        aupr_std = np.std(auprs)
         mlflow.log_metric("test_auc_mean", auc_mean)
         mlflow.log_metric("test_auc_std", auc_std)
         mlflow.log_metric("test_aupr_mean", aupr_mean)
@@ -307,13 +269,6 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--pooling_method", type=str, default="mean", choices=["mean", "max"]
-    )
-    parser.add_argument("--use_ppi", action="store_true")
-    parser.add_argument(
-        "--dropping_method",
-        type=str,
-        default="Dropout",
-        choices=["Dropout", "DropNode", "DropEdge", "DropMessage"],
     )
     parser.add_argument(
         "--pep_feat", type=str, default="finetune", choices=["esm", "finetune"]
@@ -337,8 +292,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--gnn_method",
         type=str,
-        default="gat_conv",
-        choices=["sage_conv", "gat_conv"],
+        default="GAT",
+        choices=["GCN", "GAT", "APPNP"],
     )
     parser.add_argument(
         "--data_root_dir",

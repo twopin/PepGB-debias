@@ -1,36 +1,37 @@
-import os
-import pickle
 import shutil
-from argparse import ArgumentParser
-from typing import Dict, List, Tuple
-
-import mlflow
 import numpy as np
-import torch
-import torch.nn.functional as F
-import torch_geometric.transforms as T
-from libauc.losses import AUCMLoss
-from libauc.optimizers import PESG
-from lightning.pytorch import LightningModule, Trainer
-from lightning.pytorch.callbacks import ModelCheckpoint
-from lightning.pytorch.loggers import MLFlowLogger
-from sklearn.metrics import auc, precision_recall_curve
-from torch import Tensor
-from torch_geometric.data import Batch
-from torch_geometric.data.lightning import LightningLinkData
-from torch_geometric.typing import EdgeType, NodeType
-from torch_geometric.utils import add_self_loops
-from torchmetrics import AUROC, ROC
-
+import os
 from src.data import PLProteinPeptideInteraction
 from src.model import PPIHetero
+from torchmetrics import AUROC, ROC
+from sklearn.metrics import precision_recall_curve, auc
+from typing import Dict, List, Tuple
+from torch import Tensor
+import torch_geometric.transforms as T
+from argparse import ArgumentParser
+
+from torch_geometric.typing import EdgeType, NodeType
+from torch_geometric.data import Batch
+import torch.nn.functional as F
+import torch
+from lightning.pytorch import (
+    LightningModule,
+    Trainer,
+)
+from lightning.pytorch.callbacks import ModelCheckpoint
+from lightning.pytorch.loggers import MLFlowLogger
+from torch_geometric.data.lightning import LightningLinkData
+import mlflow
+from libauc.losses import AUCMLoss
+from libauc.optimizers import PESG
 
 
 class PLPPIHetero(LightningModule):
     def __init__(
         self,
-        in_channels,
         hidden_channels,
+        num_pep_nodes,
+        num_prot_nodes,
         metadata,
         gnn_method,
         dropout_ratio,
@@ -42,20 +43,17 @@ class PLPPIHetero(LightningModule):
         lr,
         dropping_method,
         repeat_id,
-        add_skip_connection,
-        num_gnn_layers,
     ):
         super().__init__()
         self.model = PPIHetero(
-            in_channels,
             hidden_channels,
+            num_pep_nodes,
+            num_prot_nodes,
             metadata,
             gnn_method,
             dropout_ratio,
             feat_src,
             dropping_method,
-            add_skip_connection,
-            num_gnn_layers,
         )
         self.fold_idx = fold_idx
         self.repeat_id = repeat_id
@@ -67,7 +65,6 @@ class PLPPIHetero(LightningModule):
         self.beta = beta
         self.optimizer = optimizer
         self.lr = lr
-        self.add_skip_connection = add_skip_connection
 
         self.metric_cache = {
             "val": {"gt": [], "pred": []},
@@ -91,18 +88,7 @@ class PLPPIHetero(LightningModule):
 
     def common_step(self, batch: Batch, stage: str):
         batch_size = batch.x_dict["prot"].shape[0]
-        # add self loop edge
-        # new_edge_index,_ = add_self_loops(batch["pep","bind","prot"]["edge_index"])
-        # batch["pep","bind","prot"]["edge_index"] = new_edge_index
-
-        # new_edge_index,_ = add_self_loops(batch["prot","rev_bind","pep"]["edge_index"])
-        # batch["prot","rev_bind","pep"]["edge_index"] = new_edge_index
-
         y_pred = self.model(batch)
-        # with open(
-        #     "./tmp/debug_data/{0}_data.pickle".format(stage), "wb"
-        # ) as fout:
-        #     pickle.dump(batch, fout)
         y = batch["pep", "bind", "prot"].edge_label
         # if stage == "train":
         #     print(torch.count_nonzero(y))
@@ -121,7 +107,7 @@ class PLPPIHetero(LightningModule):
         )
         if stage in ["val", "test"]:
             self.metric_cache[stage]["gt"].append(y)
-            self.metric_cache[stage]["pred"].append(torch.sigmoid(y_pred))
+            self.metric_cache[stage]["pred"].append(y_pred)
         return loss
 
     def training_step(self, batch: Batch, batch_idx: int) -> Tensor:
@@ -166,8 +152,6 @@ class PLPPIHetero(LightningModule):
             gt.cpu().numpy(), pred.cpu().numpy()
         )
         aupr = auc(recall, precision) * 100
-        # with open("./tmp/debug_data/test_out.pickle", "wb") as fout:
-        #     pickle.dump({"gt": gt, "pred": pred}, fout)
 
         self.log(
             "test_auc_fold_{}_repeat_{}".format(self.fold_idx, self.repeat_id),
@@ -193,18 +177,14 @@ class PLPPIHetero(LightningModule):
 
 
 def main(args):
-    # print(vars(args))
-    # exit(0)
     model = None
 
-    # mlflow.set_tracking_uri("http://192.168.1.237:45001")
     mlflow.set_tracking_uri("http://10.28.0.57:45000")
     mlflow.set_experiment(
-        "{}_{}".format(args.exp_name, args.split_method)
+        "ppi_graph_1101_{}".format(args.split_method)
     )  # set the experiment
     mlflow.pytorch.autolog()
 
-    logdir_logged = False
     device = torch.device("cuda:{}".format(args.device))
     with mlflow.start_run() as run:
         run_id = run.info.run_id
@@ -213,33 +193,37 @@ def main(args):
         repeat_auc_stds = []
         repeat_auprs = []
         repeat_aupr_stds = []
-        for _repeat_id in range(args.repeat_times):
+        for _repeat_id in range(1):
             fold_aucs = []
             fold_auprs = []
-            for i in range(1, 5):
+            for i in range(5):
+                # for i in range(1, 2):
+                fold_id = str(i + 1)
                 data_module = PLProteinPeptideInteraction(
-                    root=args.data_root_dir,
+                    args.data_root_dir,
                     remove_cache=True,
                     batch_size=args.batch_size,
-                    use_ppi=args.use_ppi,
                     disjoint_train_ratio=args.disjoint_train_ratio,
                     neg_sampling_ratio=args.neg_sampling_ratio,
                     pooling_method=args.pooling_method,
                     split_method=args.split_method,
                     fold_id=i + 1,
-                    pep_feat=args.pep_feat,
-                    random_feat=args.random_feat,
-                    reduct_ratio=args.reduct_ratio,
                 )
-                fold_id = str(i + 1)
-                # num_prot = data_module.data["prot"]["node_id"].shape[0]
-                # num_pep = data_module.data["pep"]["node_id"].shape[0]
+                num_prot = data_module.data["prot"]["node_id"].shape[0]
+                num_pep = data_module.data["pep"]["node_id"].shape[0]
                 metadata = data_module.data.metadata()
+                # checkpoint = ModelCheckpoint(
+                #     monitor="val_auc",
+                #     save_top_k=2,
+                #     mode="max",
+                #     filename="{epoch:03d}-{val_auc:.2f}",
+                # )
                 if model is not None:
                     del model
                 model = PLPPIHetero(
-                    args.in_channels,
                     args.hidden_channels,
+                    num_pep,
+                    num_prot,
                     metadata,
                     args.gnn_method,
                     args.dropout_ratio,
@@ -251,25 +235,17 @@ def main(args):
                     args.lr,
                     args.dropping_method,
                     _repeat_id,
-                    args.add_skip_connection,
-                    args.gnn_layers,
                 )
                 trainer = Trainer(
                     devices=[args.device],
                     max_epochs=args.epoch,
                     log_every_n_steps=1,
+                    # callbacks=[checkpoint],
                     default_root_dir=os.path.join(
                         args.log_root_dir, run_id, str(_repeat_id), fold_id
                     ),
                     enable_checkpointing=False,
                 )
-                if not logdir_logged:
-                    mlflow.log_param(
-                        "run_dir_fold_{}_repeat_{}".format(i, _repeat_id),
-                        trainer.log_dir,
-                    )
-                    logdir_logged = True
-
                 ckpt_path_dir = os.path.join(
                     args.ckpt_root,
                     str(_repeat_id),
@@ -279,7 +255,6 @@ def main(args):
                 ckpts = os.listdir(ckpt_path_dir)
                 ckpt_path = os.path.join(ckpt_path_dir, ckpts[0])
 
-                # trainer.fit(model, data_module)
                 res = trainer.test(model, data_module, ckpt_path)[0]
                 fold_aucs.append(
                     res["test_auc_fold_{}_repeat_{}".format(i, _repeat_id)]
@@ -343,18 +318,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--feat_src", type=str, default="esm", choices=["esm", "emb", "esm_emb"]
     )
-    parser.add_argument("--exp_name", type=str, default="exp")
-    parser.add_argument("--random_feat", action="store_true")
     parser.add_argument(
         "--optimizer", type=str, default="adam", choices=["adam", "pesg"]
-    )
-    parser.add_argument("--add_skip_connection", action="store_true")
-    parser.add_argument("--in_channels", type=int, default=256)
-    parser.add_argument(
-        "--repeat_times",
-        type=int,
-        default=5,
-        help="times to repeat run crossfold",
     )
     parser.add_argument("--hidden_channels", type=int, default=256)
     parser.add_argument("--beta", type=float, default=0.5)
@@ -365,13 +330,11 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=int, default=0)
     parser.add_argument("--neg_sampling_ratio", type=float, default=5.0)
     parser.add_argument("--dropout_ratio", type=float, default=0.3)
-    parser.add_argument("--reduct_ratio", type=float, default=0)
-    parser.add_argument("--gnn_layers", type=int, default=2)
     parser.add_argument(
         "--gnn_method",
         type=str,
         default="gat_conv",
-        choices=["sage_conv", "gat_conv", "gin_conv"],
+        choices=["sage_conv", "gat_conv"],
     )
     parser.add_argument(
         "--data_root_dir",
@@ -385,12 +348,12 @@ if __name__ == "__main__":
         default="./tmp/training_logs",
         help="path to save logs",
     )
-
     parser.add_argument(
         "--ckpt_root",
         type=str,
         default="./tmp/",
         help="folder contains previous trained model",
     )
+
     args = parser.parse_args()
     main(args)

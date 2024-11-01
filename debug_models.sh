@@ -11,14 +11,13 @@ cuda_devices=$1
 # dropping_methods=(Dropout DropMessage)
 
 
-
 split_method=c
-dropout_ratios=(0.3)
-disjoint_train_ratios=(0.4)
+dropout_ratios=(0.5)
+disjoint_train_ratios=(0.5)
 gnn_methods=(gat_conv)
-feat_srcs=(esm)
+feat_srcs=(esm )
 hidden_channels=(512)
-betas=(0.4)
+betas=(0.5)
 dropping_methods=(DropMessage)
 
 for feat_src in "${feat_srcs[@]}"; do
@@ -28,7 +27,7 @@ for feat_src in "${feat_srcs[@]}"; do
                 for hidden_channel  in "${hidden_channels[@]}"; do
                     for beta in "${betas[@]}"; do
                         for dropping_method in "${dropping_methods[@]}"; do
-                            python train_batch_pl.py  --gnn_method $gnn_method \
+                            python train_batch_pl_ckpts.py  --gnn_method $gnn_method \
                             --split_method $split_method \
                             --disjoint_train_ratio $disjoint_train_ratio \
                             --dropout_ratio $dropout_ratio \
@@ -37,7 +36,8 @@ for feat_src in "${feat_srcs[@]}"; do
                             --device $cuda_devices \
                             --hidden_channels $hidden_channel \
                             --dropping_method $dropping_method \
-                            --beta $beta
+                            --beta $beta \
+                            --log_root_dir /data/logs/ppi_graph 
                         done
                     done
                 done
