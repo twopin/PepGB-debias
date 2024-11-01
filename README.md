@@ -23,20 +23,22 @@ Please refer to the `data` folder and download feature pickle files from https:/
 
 ### Training PepGB through cross-validation
 
-To train the heterogeneous GNN model PepGB for peptide-protein interaction prediction, please refer to (./ckpt/PepGB/) in the `ckpt` folder. 
-Then, run the following command:
+To use the heterogeneous GNN model PepGB for peptide-protein interaction prediction, please go to `scripts` folder. 
+Then, run the following commands for training:
 
 ```bash
-python train_PepGB.py --data_split {split} --outdir ./outputs  # Replace {split} with the setting of the data.
+sh train_models_a.sh # train under novel protein setting
+sh train_models_b.sh # train under novel peptide setting
+sh train_models_c.sh # train under novel pair setting
 ```
 
+
 ### Inference using the trained PepGB ckpt 
-To predict your own data, you need to first generate ESM-based features of the peptides and proteins. Please refer to (./feature/README.md) in the `feature` folder. 
+To predict your own data, you need to first generate ESM-based features of the peptides and proteins. Please refer to five repeated ckpts for each setting in (./ckpt/PepGB) . 
 
-Example:
-
+Then, run the following commands for inference (a: novel protein, b: novel_peptide, c: novel_pair):
 ```bash
-python inference_pepGB.py 
+sh infer_models.sh 
 ```
 
 ## diPepGB
