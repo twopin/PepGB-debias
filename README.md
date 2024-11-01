@@ -34,7 +34,7 @@ sh train_models_c.sh # train under novel pair setting
 
 
 ### Inference using the trained PepGB ckpt 
-To predict your own data, you need to first generate ESM-based features of the peptides and proteins. Please first downloaded the 5-repeated ckpt files `PepGB.zip` in https://cloud.tsinghua.edu.cn/d/7388a3702d1541b3938b/ and put them into (./ckpt/PepGB) . 
+To predict your own data, you need to first generate ESM-based features of the peptides and proteins. Please first download the 5-repeated ckpt files `PepGB.zip` in https://cloud.tsinghua.edu.cn/d/7388a3702d1541b3938b/ and put them into (./ckpt/PepGB) . 
 
 Then, run the following commands for inference (a: novel protein, b: novel_peptide, c: novel_pair):
 ```bash
@@ -60,7 +60,7 @@ For training, please first download the training and validation file  in the `fe
 ```
 python inference_diPepGB.py
 ```
-For inference, using the ckpt model fuile in the `ckpt` folder.
+For inference, using  the `model_diPepGB.pt` file in the `ckpt` folder.
 
 ### Downloading ckpts for feature extraction
 https://cloud.tsinghua.edu.cn/d/7388a3702d1541b3938b/
